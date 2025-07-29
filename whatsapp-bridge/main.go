@@ -24,7 +24,6 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	waProto "go.mau.fi/whatsmeow/binary/proto"
-	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
@@ -676,7 +675,7 @@ func extractDirectPathFromURL(url string) string {
 }
 
 // Start a REST API server to expose the WhatsApp client functionality
-func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port int) {
+func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, dbAdapter *DatabaseAdapter, port int) {
 	// Handler for sending messages
 	http.HandleFunc("/api/send", func(w http.ResponseWriter, r *http.Request) {
 		// Only allow POST requests
@@ -774,6 +773,54 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		})
 	})
 
+	// Handler for database status
+	http.HandleFunc("/api/db/status", func(w http.ResponseWriter, r *http.Request) {
+		// Only allow GET requests
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Get database connection info
+		connInfo := dbAdapter.GetConnectionInfo()
+		
+		// Test database connection
+		var connectionStatus string
+		var isHealthy bool
+		
+		if dbAdapter.dbURL != "" {
+			if err := dbAdapter.TestConnection(); err != nil {
+				connectionStatus = fmt.Sprintf("Connection failed: %v", err)
+				isHealthy = false
+			} else {
+				connectionStatus = "Connected successfully"
+				isHealthy = true
+			}
+		} else {
+			connectionStatus = "Database not initialized"
+			isHealthy = false
+		}
+
+		// Prepare response
+		response := map[string]interface{}{
+			"healthy":           isHealthy,
+			"status":            connectionStatus,
+			"database_info":     connInfo,
+			"timestamp":         time.Now().UTC().Format(time.RFC3339),
+		}
+
+		// Set response headers
+		w.Header().Set("Content-Type", "application/json")
+		
+		// Set status code based on health
+		if !isHealthy {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+
+		// Send response
+		json.NewEncoder(w).Encode(response)
+	})
+
 	// Start the server
 	serverAddr := fmt.Sprintf(":%d", port)
 	fmt.Printf("Starting REST API server on %s...\n", serverAddr)
@@ -795,20 +842,17 @@ func main() {
 	qrWebServer := NewQRWebServer()
 	qrWebServer.StartQRWebServer(3000)
 
-	// Create database connection for storing session data
-	dbLog := waLog.Stdout("Database", "INFO", true)
-
-	// Create directory for database if it doesn't exist
-	if err := os.MkdirAll("store", 0755); err != nil {
-		logger.Errorf("Failed to create store directory: %v", err)
-		return
-	}
-
-	container, err := sqlstore.New(context.Background(), "sqlite3", "file:store/whatsapp.db?_foreign_keys=on", dbLog)
+	// Initialize database adapter for Supabase/PostgreSQL with SQLite fallback
+	dbAdapter := NewDatabaseAdapter(logger)
+	container, err := dbAdapter.Initialize()
 	if err != nil {
-		logger.Errorf("Failed to connect to database: %v", err)
+		logger.Errorf("Failed to initialize database: %v", err)
 		return
 	}
+
+	// Log connection info
+	connInfo := dbAdapter.GetConnectionInfo()
+	logger.Infof("Database initialized: %+v", connInfo)
 
 	// Get device store - This contains session information
 	deviceStore, err := container.GetFirstDevice(context.Background())
@@ -919,7 +963,7 @@ func main() {
 	fmt.Println("\n✓ Connected to WhatsApp! Type 'help' for commands.")
 
 	// Start REST API server
-	startRESTServer(client, messageStore, 8080)
+	startRESTServer(client, messageStore, dbAdapter, 8080)
 
 	// Create a channel to keep the main goroutine alive
 	exitChan := make(chan os.Signal, 1)
