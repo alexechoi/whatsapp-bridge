@@ -117,6 +117,37 @@ func (q *QRWebServer) ServeQRPage(w http.ResponseWriter, r *http.Request) {
             color: #155724;
             border: 1px solid #c3e6cb;
         }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .db-status {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 20px 0;
+            text-align: left;
+            font-size: 0.9em;
+        }
+        .db-status h4 {
+            margin: 0 0 10px 0;
+            color: #495057;
+        }
+        .db-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        .db-indicator.healthy {
+            background: #28a745;
+        }
+        .db-indicator.unhealthy {
+            background: #dc3545;
+        }
         .refresh-btn {
             background: #25D366;
             color: white;
@@ -180,22 +211,59 @@ func (q *QRWebServer) ServeQRPage(w http.ResponseWriter, r *http.Request) {
     </div>
     
     <script>
+        // Function to load database status
+        function loadDatabaseStatus() {
+            return fetch('http://localhost:8080/api/db/status')
+                .then(response => response.json())
+                .catch(err => {
+                    console.error('Failed to fetch database status:', err);
+                    return {
+                        healthy: false,
+                        status: 'Failed to connect to API',
+                        database_info: { type: 'unknown' }
+                    };
+                });
+        }
+
+        // Function to render database status
+        function renderDatabaseStatus(dbData) {
+            const indicator = dbData.healthy ? 'healthy' : 'unhealthy';
+            const dbType = dbData.database_info?.type || 'unknown';
+            const driver = dbData.database_info?.driver || 'unknown';
+            const modeText = dbData.database_info?.is_remote ? 'Remote (Supabase)' : 'Local Development';
+            
+            return '<div class="db-status">' +
+                   '<h4><span class="db-indicator ' + indicator + '"></span>Database Status</h4>' +
+                   '<div><strong>Status:</strong> ' + dbData.status + '</div>' +
+                   '<div><strong>Type:</strong> ' + dbType + '</div>' +
+                   '<div><strong>Driver:</strong> ' + driver + '</div>' +
+                   '<div><strong>Mode:</strong> ' + modeText + '</div>' +
+                   '</div>';
+        }
+
         // Load content immediately
-        fetch('/qr/status')
-            .then(response => response.json())
-            .then(data => {
+        Promise.all([
+            fetch('/qr/status').then(response => response.json()),
+            loadDatabaseStatus()
+        ])
+            .then(([qrData, dbData]) => {
                 const content = document.getElementById('content');
-                if (data.connected) {
-                    content.innerHTML = '<div class="status connected">✅ Successfully connected to WhatsApp!</div>';
-                } else if (data.qr_available) {
-                    content.innerHTML = 
+                let qrContent = '';
+                
+                if (qrData.connected) {
+                    qrContent = '<div class="status connected">✅ Successfully connected to WhatsApp!</div>';
+                } else if (qrData.qr_available) {
+                    qrContent = 
                         '<div class="status waiting">⏳ Waiting for QR code scan...</div>' +
                         '<div class="qr-container">' +
                         '<img src="/qr/image" alt="QR Code" class="qr-code" />' +
                         '</div>';
                 } else {
-                    content.innerHTML = '<div class="status waiting">⏳ Generating QR code...</div>';
+                    qrContent = '<div class="status waiting">⏳ Generating QR code...</div>';
                 }
+                
+                // Combine QR content with database status
+                content.innerHTML = qrContent + renderDatabaseStatus(dbData);
             })
             .catch(err => {
                 document.getElementById('content').innerHTML = 
