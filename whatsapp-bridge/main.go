@@ -791,6 +791,10 @@ func main() {
 	logger := waLog.Stdout("Client", "INFO", true)
 	logger.Infof("Starting WhatsApp client...")
 
+	// Initialize QR web server
+	qrWebServer := NewQRWebServer()
+	qrWebServer.StartQRWebServer(3000)
+
 	// Create database connection for storing session data
 	dbLog := waLog.Stdout("Database", "INFO", true)
 
@@ -866,12 +870,21 @@ func main() {
 			return
 		}
 
-		// Print QR code for pairing with phone
+		// Handle QR code for pairing with phone
+		fmt.Printf("\n🌐 QR Code available at: http://localhost:3000\n")
+		fmt.Println("Open the URL in your browser to scan the QR code with WhatsApp")
+		
 		for evt := range qrChan {
 			if evt.Event == "code" {
-				fmt.Println("\nScan this QR code with your WhatsApp app:")
+				// Update web server with new QR code
+				qrWebServer.UpdateQRCode(evt.Code)
+				fmt.Println("\n📱 QR Code updated - refresh your browser to see the new code")
+				// Also show in terminal as backup
+				fmt.Println("\nTerminal QR code (backup):")
 				qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
 			} else if evt.Event == "success" {
+				// Mark as connected in web server
+				qrWebServer.SetConnected()
 				connected <- true
 				break
 			}
