@@ -5,6 +5,7 @@ A production-ready WhatsApp bridge built with Go that provides a REST API interf
 ## Features
 
 - **WhatsApp Integration**: Connect to WhatsApp using QR code authentication
+- **Web QR Interface**: Modern web interface for QR code scanning (no terminal access required)
 - **REST API**: Send messages and download media via HTTP endpoints
 - **Message History**: Store and retrieve message history with SQLite database
 - **Media Support**: Send and receive images, videos, audio, and documents
@@ -39,20 +40,50 @@ From the project root directory:
 
 ```bash
 cd whatsapp-bridge
-go run main.go
+go run main.go qr_web.go
 ```
 
 The application will:
 1. Start the WhatsApp client
-2. Display a QR code in the terminal for authentication
-3. Start the REST API server on port 8080
-4. Begin listening for incoming messages
+2. Launch the web QR interface on port 3000
+3. Display a QR code both in the web interface and terminal (backup)
+4. Start the REST API server on port 8080
+5. Begin listening for incoming messages
+
+### QR Code Authentication
+
+#### Web Interface (Recommended)
+1. Open your browser and navigate to `http://localhost:3000`
+2. You'll see a modern web interface with the QR code
+3. Open WhatsApp on your phone
+4. Go to Settings → Linked Devices → Link a Device
+5. Scan the QR code from the web page
+6. The page will automatically update when connected
+
+#### Terminal (Backup)
+If you prefer the terminal, the QR code is also displayed there as a backup option.
 
 ### First Time Setup
 
 1. Run the application
 2. Scan the QR code with your WhatsApp mobile app (WhatsApp > Settings > Linked Devices > Link a Device)
 3. Once connected, the bridge will start receiving messages
+
+## Ports and Services
+
+The WhatsApp Bridge runs two services simultaneously:
+
+- **Web QR Interface**: `http://localhost:3000`
+  - Modern web interface for QR code authentication
+  - Auto-refreshing status updates
+  - Mobile-friendly responsive design
+  - Real-time connection status
+
+- **REST API Server**: `http://localhost:8080`
+  - Send messages via HTTP POST requests
+  - Download media files
+  - Retrieve message history
+  - All programmatic WhatsApp operations
 
 ## API Endpoints
 
