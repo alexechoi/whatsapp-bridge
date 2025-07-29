@@ -788,8 +788,8 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, dbAda
 		var connectionStatus string
 		var isHealthy bool
 		
-		if dbAdapter.config != nil {
-			if err := dbAdapter.TestConnection(dbAdapter.config); err != nil {
+		if dbAdapter.dbURL != "" {
+			if err := dbAdapter.TestConnection(); err != nil {
 				connectionStatus = fmt.Sprintf("Connection failed: %v", err)
 				isHealthy = false
 			} else {
