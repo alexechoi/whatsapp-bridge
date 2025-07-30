@@ -4,15 +4,26 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 )
+
+// init function runs before main() and loads environment variables
+func init() {
+	// Load .env file if it exists
+	if err := godotenv.Load(); err != nil {
+		// Don't fail if .env file doesn't exist, just log it
+		log.Printf("No .env file found or error loading it: %v", err)
+	}
+}
 
 // DatabaseAdapter handles connections to either PostgreSQL or SQLite
 type DatabaseAdapter struct {
