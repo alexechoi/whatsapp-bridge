@@ -949,6 +949,8 @@ func main() {
 			logger.Errorf("Failed to connect: %v", err)
 			return
 		}
+		// Mark as connected in web server since we have a session
+		qrWebServer.SetConnected()
 		connected <- true
 	}
 

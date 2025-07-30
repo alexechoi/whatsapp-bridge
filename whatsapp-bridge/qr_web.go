@@ -341,12 +341,24 @@ func (q *QRWebServer) ServeQRPage(w http.ResponseWriter, r *http.Request) {
                             content.innerHTML = showQRInterface();
                             // Restart auto-refresh
                             startAutoRefresh();
+                        } else if (!document.getElementById('qr-status')) {
+                            // This handles the initial load when the QR interface isn't yet visible.
+                            content.innerHTML = showQRInterface();
                         }
                         updateQRStatus(data);
                     }
                 })
                 .catch(err => {
                     console.error('Error fetching status:', err);
+                    const content = document.getElementById('content');
+                    // Avoid being stuck on "Loading..." if the server is unreachable.
+                    if (!document.getElementById('qr-status')) {
+                        content.innerHTML = showQRInterface();
+                    }
+                    const qrStatus = document.getElementById('qr-status');
+                    if (qrStatus) {
+                        qrStatus.innerHTML = '<div class="status error">Could not connect to the server. Retrying...</div>';
+                    }
                 });
         }
         
