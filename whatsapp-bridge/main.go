@@ -1009,6 +1009,32 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, dbAda
 		json.NewEncoder(w).Encode(messages)
 	})
 
+	// Handler for health check
+	http.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+		// Only allow GET requests
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Check WhatsApp client connection status
+		isConnected := client.IsConnected()
+		response := map[string]interface{}{
+			"connected": isConnected,
+			"message":   "WhatsApp client is connected.",
+		}
+
+		if !isConnected {
+			response["message"] = "WhatsApp client is not connected. Please refresh credentials."
+		}
+
+		// Set response headers
+		w.Header().Set("Content-Type", "application/json")
+		
+		// Send response
+		json.NewEncoder(w).Encode(response)
+	});
+
 	// Start the server
 	serverAddr := fmt.Sprintf(":%d", port)
 	fmt.Printf("Starting REST API server on %s...\n", serverAddr)
