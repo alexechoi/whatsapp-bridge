@@ -205,6 +205,7 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
-whatsapp-bridge/store/whatsapp.db
-whatsapp-bridge/store/messages.db
-whatsapp-bridge/store/whatsmeow.db
+
+# Internal Fall Store
+whatsapp-bridge/store
+

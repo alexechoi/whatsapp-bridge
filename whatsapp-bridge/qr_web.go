@@ -45,13 +45,13 @@ func (q *QRWebServer) GetQRCode() (string, bool) {
 	return q.currentQRCode, q.isConnected
 }
 
-// ServeQRPage serves the main QR code page
+// ServeQRPage serves the main QR code page or dashboard
 func (q *QRWebServer) ServeQRPage(w http.ResponseWriter, r *http.Request) {
 	tmpl := `
 <!DOCTYPE html>
 <html>
 <head>
-    <title>WhatsApp Bridge - QR Code Login</title>
+    <title>WhatsApp Bridge</title>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
@@ -61,9 +61,6 @@ func (q *QRWebServer) ServeQRPage(w http.ResponseWriter, r *http.Request) {
             margin: 0;
             padding: 20px;
             min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
         }
         .container {
             background: white;
@@ -71,8 +68,17 @@ func (q *QRWebServer) ServeQRPage(w http.ResponseWriter, r *http.Request) {
             padding: 40px;
             box-shadow: 0 20px 40px rgba(0,0,0,0.1);
             text-align: center;
-            max-width: 500px;
+            max-width: 800px;
             width: 100%;
+            margin: 0 auto;
+        }
+        .qr-container {
+            max-width: 500px;
+            margin: 0 auto;
+        }
+        .dashboard {
+            text-align: left;
+            max-width: 100%;
         }
         .logo {
             font-size: 2.5em;
@@ -89,7 +95,7 @@ func (q *QRWebServer) ServeQRPage(w http.ResponseWriter, r *http.Request) {
             margin-bottom: 30px;
             font-size: 1.1em;
         }
-        .qr-container {
+        .qr-code-area {
             background: #f8f9fa;
             border-radius: 15px;
             padding: 30px;
@@ -122,32 +128,6 @@ func (q *QRWebServer) ServeQRPage(w http.ResponseWriter, r *http.Request) {
             color: #721c24;
             border: 1px solid #f5c6cb;
         }
-        .db-status {
-            background: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 8px;
-            padding: 15px;
-            margin: 20px 0;
-            text-align: left;
-            font-size: 0.9em;
-        }
-        .db-status h4 {
-            margin: 0 0 10px 0;
-            color: #495057;
-        }
-        .db-indicator {
-            display: inline-block;
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            margin-right: 8px;
-        }
-        .db-indicator.healthy {
-            background: #28a745;
-        }
-        .db-indicator.unhealthy {
-            background: #dc3545;
-        }
         .refresh-btn {
             background: #25D366;
             color: white;
@@ -158,6 +138,7 @@ func (q *QRWebServer) ServeQRPage(w http.ResponseWriter, r *http.Request) {
             font-size: 1em;
             font-weight: 500;
             transition: background 0.3s;
+            margin: 10px 5px;
         }
         .refresh-btn:hover {
             background: #128C7E;
@@ -177,98 +158,323 @@ func (q *QRWebServer) ServeQRPage(w http.ResponseWriter, r *http.Request) {
             margin: 8px 0;
             color: #1565c0;
         }
-    </style>
-    <script>
-        function refreshPage() {
-            location.reload();
+        .dashboard-section {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
         }
-        
-        // Auto-refresh every 3 seconds to check for updates
-        setInterval(refreshPage, 3000);
-    </script>
+        .dashboard-section h3 {
+            margin-top: 0;
+            color: #333;
+        }
+        .message-list {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 10px;
+            background: white;
+        }
+        .message-item {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            margin-bottom: 10px;
+        }
+        .message-item:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+        }
+        .message-sender {
+            font-weight: bold;
+            color: #25D366;
+        }
+        .message-time {
+            font-size: 0.8em;
+            color: #666;
+        }
+        .message-content {
+            margin-top: 5px;
+        }
+        .send-message-form {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+        .form-group input, .form-group textarea {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+        .form-group textarea {
+            height: 80px;
+            resize: vertical;
+        }
+        .send-btn {
+            background: #25D366;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: 500;
+        }
+        .send-btn:hover {
+            background: #128C7E;
+        }
+        .send-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .loading {
+            text-align: center;
+            color: #666;
+            padding: 20px;
+        }
+        .error {
+            color: #dc3545;
+            background: #f8d7da;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .success {
+            color: #155724;
+            background: #d4edda;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+    </style>
 </head>
 <body>
     <div class="container">
         <div class="logo">📱</div>
         <h1>WhatsApp Bridge</h1>
-        <p class="subtitle">Scan QR Code to Connect</p>
         
         <div id="content">
-            <!-- Content will be loaded here -->
+            <div class="loading">Loading...</div>
         </div>
-        
-        <div class="instructions">
-            <strong>How to connect:</strong>
-            <ol>
-                <li>Open WhatsApp on your phone</li>
-                <li>Go to Settings → Linked Devices</li>
-                <li>Tap "Link a Device"</li>
-                <li>Scan the QR code above</li>
-            </ol>
-        </div>
-        
-        <button class="refresh-btn" onclick="refreshPage()">Refresh</button>
     </div>
     
     <script>
-        // Function to load database status
-        function loadDatabaseStatus() {
-            return fetch('http://localhost:8080/api/db/status')
-                .then(response => response.json())
-                .catch(err => {
-                    console.error('Failed to fetch database status:', err);
-                    return {
-                        healthy: false,
-                        status: 'Failed to connect to API',
-                        database_info: { type: 'unknown' }
-                    };
-                });
-        }
-
-        // Function to render database status
-        function renderDatabaseStatus(dbData) {
-            const indicator = dbData.healthy ? 'healthy' : 'unhealthy';
-            const dbType = dbData.database_info?.type || 'unknown';
-            const driver = dbData.database_info?.driver || 'unknown';
-            const modeText = dbData.database_info?.is_remote ? 'Remote (Supabase)' : 'Local Development';
-            
-            return '<div class="db-status">' +
-                   '<h4><span class="db-indicator ' + indicator + '"></span>Database Status</h4>' +
-                   '<div><strong>Status:</strong> ' + dbData.status + '</div>' +
-                   '<div><strong>Type:</strong> ' + dbType + '</div>' +
-                   '<div><strong>Driver:</strong> ' + driver + '</div>' +
-                   '<div><strong>Mode:</strong> ' + modeText + '</div>' +
+        let isConnected = false;
+        let refreshInterval;
+        
+        function showQRInterface() {
+            return '<div class="qr-container">' +
+                   '<p class="subtitle">Scan QR Code to Connect</p>' +
+                   '<div id="qr-status"></div>' +
+                   '<div class="instructions">' +
+                   '<strong>How to connect:</strong>' +
+                   '<ol>' +
+                   '<li>Open WhatsApp on your phone</li>' +
+                   '<li>Go to Settings &rarr; Linked Devices</li>' +
+                   '<li>Tap "Link a Device"</li>' +
+                   '<li>Scan the QR code above</li>' +
+                   '</ol>' +
+                   '</div>' +
+                   '<button class="refresh-btn" onclick="refreshStatus()">Refresh</button>' +
                    '</div>';
         }
-
-        // Load content immediately
-        Promise.all([
-            fetch('/qr/status').then(response => response.json()),
-            loadDatabaseStatus()
-        ])
-            .then(([qrData, dbData]) => {
-                const content = document.getElementById('content');
-                let qrContent = '';
-                
-                if (qrData.connected) {
-                    qrContent = '<div class="status connected">✅ Successfully connected to WhatsApp!</div>';
-                } else if (qrData.qr_available) {
-                    qrContent = 
-                        '<div class="status waiting">⏳ Waiting for QR code scan...</div>' +
-                        '<div class="qr-container">' +
-                        '<img src="/qr/image" alt="QR Code" class="qr-code" />' +
-                        '</div>';
+        
+        function showDashboard() {
+            return '<div class="dashboard">' +
+                   '<div class="status connected">&#x2705; Connected to WhatsApp!</div>' +
+                   '<div class="dashboard-section">' +
+                   '<h3>&#x1F4CB; Recent Messages</h3>' +
+                   '<div id="message-list" class="message-list">' +
+                   '<div class="loading">Loading messages...</div>' +
+                   '</div>' +
+                   '<button class="refresh-btn" onclick="loadMessages()">Refresh Messages</button>' +
+                   '</div>' +
+                   '<div class="dashboard-section">' +
+                   '<h3>&#x1F4E4; Send Message</h3>' +
+                   '<div class="send-message-form">' +
+                   '<div class="form-group">' +
+                   '<label for="recipient">Recipient Phone Number:</label>' +
+                   '<input type="text" id="recipient" placeholder="e.g., +1234567890" />' +
+                   '</div>' +
+                   '<div class="form-group">' +
+                   '<label for="message">Message:</label>' +
+                   '<textarea id="message" placeholder="Type your message here..."></textarea>' +
+                   '</div>' +
+                   '<button class="send-btn" onclick="sendMessage()" id="send-btn">Send Message</button>' +
+                   '<div id="send-result"></div>' +
+                   '</div>' +
+                   '</div>' +
+                   '</div>';
+        }
+        
+        function refreshStatus() {
+            fetch('/qr/status')
+                .then(response => response.json())
+                .then(data => {
+                    const content = document.getElementById('content');
+                    
+                    if (data.connected) {
+                        if (!isConnected) {
+                            isConnected = true;
+                            content.innerHTML = showDashboard();
+                            loadMessages();
+                            // Stop auto-refresh when connected
+                            if (refreshInterval) {
+                                clearInterval(refreshInterval);
+                            }
+                        }
+                    } else {
+                        if (isConnected) {
+                            isConnected = false;
+                            content.innerHTML = showQRInterface();
+                            // Restart auto-refresh
+                            startAutoRefresh();
+                        } else if (!document.getElementById('qr-status')) {
+                            // This handles the initial load when the QR interface isn't yet visible.
+                            content.innerHTML = showQRInterface();
+                        }
+                        updateQRStatus(data);
+                    }
+                })
+                .catch(err => {
+                    console.error('Error fetching status:', err);
+                    const content = document.getElementById('content');
+                    // Avoid being stuck on "Loading..." if the server is unreachable.
+                    if (!document.getElementById('qr-status')) {
+                        content.innerHTML = showQRInterface();
+                    }
+                    const qrStatus = document.getElementById('qr-status');
+                    if (qrStatus) {
+                        qrStatus.innerHTML = '<div class="status error">Could not connect to the server. Retrying...</div>';
+                    }
+                });
+        }
+        
+        function updateQRStatus(data) {
+            const qrStatus = document.getElementById('qr-status');
+            if (!qrStatus) return;
+            
+            if (data.qr_available) {
+                qrStatus.innerHTML = '<div class="status waiting">&#x23F3; Waiting for QR code scan...</div>' +
+                                   '<div class="qr-code-area">' +
+                                   '<img src="/qr/image" alt="QR Code" class="qr-code" />' +
+                                   '</div>';
+            } else {
+                qrStatus.innerHTML = '<div class="status waiting">&#x23F3; Generating QR code...</div>';
+            }
+        }
+        
+        function loadMessages() {
+            const messageList = document.getElementById('message-list');
+            if (!messageList) return;
+            
+            messageList.innerHTML = '<div class="loading">Loading messages...</div>';
+            
+            // Get list of chats first
+            fetch('http://localhost:8080/api/chats')
+                .then(response => response.json())
+                .then(chats => {
+                    if (chats && Object.keys(chats).length > 0) {
+                        // Get the first chat's messages as a sample
+                        const firstChatJID = Object.keys(chats)[0];
+                        return fetch('http://localhost:8080/api/messages/' + encodeURIComponent(firstChatJID) + '?limit=10');
+                    } else {
+                        throw new Error('No chats found');
+                    }
+                })
+                .then(response => response.json())
+                .then(messages => {
+                    if (messages && messages.length > 0) {
+                        let html = '';
+                        messages.forEach(msg => {
+                            const time = new Date(msg.time).toLocaleString();
+                            html += '<div class="message-item">' +
+                                   '<div class="message-sender">' + (msg.sender || 'Unknown') + '</div>' +
+                                   '<div class="message-time">' + time + '</div>' +
+                                   '<div class="message-content">' + (msg.content || '[Media]') + '</div>' +
+                                   '</div>';
+                        });
+                        messageList.innerHTML = html;
+                    } else {
+                        messageList.innerHTML = '<div class="loading">No messages found. Try sending a message to see it here.</div>';
+                    }
+                })
+                .catch(err => {
+                    console.error('Error loading messages:', err);
+                    messageList.innerHTML = '<div class="error">Failed to load messages. Make sure the API is running on port 8080.</div>';
+                });
+        }
+        
+        function sendMessage() {
+            const recipient = document.getElementById('recipient').value.trim();
+            const message = document.getElementById('message').value.trim();
+            const sendBtn = document.getElementById('send-btn');
+            const resultDiv = document.getElementById('send-result');
+            
+            if (!recipient || !message) {
+                resultDiv.innerHTML = '<div class="error">Please fill in both recipient and message fields.</div>';
+                return;
+            }
+            
+            sendBtn.disabled = true;
+            sendBtn.textContent = 'Sending...';
+            resultDiv.innerHTML = '';
+            
+            fetch('http://localhost:8080/api/send', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    recipient: recipient,
+                    message: message
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    resultDiv.innerHTML = '<div class="success">&#x2705; Message sent successfully!</div>';
+                    document.getElementById('message').value = '';
+                    // Refresh messages to show the sent message
+                    setTimeout(loadMessages, 1000);
                 } else {
-                    qrContent = '<div class="status waiting">⏳ Generating QR code...</div>';
+                    resultDiv.innerHTML = '<div class="error">&#x274C; Failed to send message: ' + data.message + '</div>';
                 }
-                
-                // Combine QR content with database status
-                content.innerHTML = qrContent + renderDatabaseStatus(dbData);
             })
             .catch(err => {
-                document.getElementById('content').innerHTML = 
-                    '<div class="status waiting">⏳ Waiting for QR code...</div>';
+                console.error('Error sending message:', err);
+                resultDiv.innerHTML = '<div class="error">&#x274C; Network error. Make sure the API is running on port 8080.</div>';
+            })
+            .finally(() => {
+                sendBtn.disabled = false;
+                sendBtn.textContent = 'Send Message';
             });
+        }
+        
+        function startAutoRefresh() {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+            }
+            refreshInterval = setInterval(refreshStatus, 3000);
+        }
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshStatus();
+            startAutoRefresh();
+        });
     </script>
 </body>
 </html>`
