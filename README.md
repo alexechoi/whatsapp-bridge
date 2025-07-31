@@ -1,36 +1,43 @@
 # WhatsApp Bridge
 
-A production-ready WhatsApp bridge built with Go that provides a REST API interface for WhatsApp messaging using the whatsmeow library. This bridge allows you to send and receive WhatsApp messages programmatically while maintaining message history in a local SQLite database.
+![Go Version](https://img.shields.io/badge/Go-1.19%2B-blue)
+![SQLite](https://img.shields.io/badge/Database-SQLite-lightgrey)
+![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL-blue)
+![REST API](https://img.shields.io/badge/API-REST-green)
+![License](https://img.shields.io/badge/License-MIT-yellow)
+
+A production-ready WhatsApp bridge built with Go that provides a REST API interface for WhatsApp messaging using the `whatsmeow` library. This bridge allows you to send and receive WhatsApp messages programmatically while maintaining message history in a local SQLite database or a PostgreSQL database.
 
 ## Features
 
 - **WhatsApp Integration**: Connect to WhatsApp using QR code authentication
 - **Web QR Interface**: Modern web interface for QR code scanning (no terminal access required)
-- **REST API**: Send messages and download media via HTTP endpoints
-- **Message History**: Store and retrieve message history with SQLite database
+- **REST API**: Send messages, download media, and retrieve chat/message history via HTTP endpoints
+- **Message History**: Store and retrieve message history with SQLite or PostgreSQL
 - **Media Support**: Send and receive images, videos, audio, and documents
 - **Group Chat Support**: Handle both individual and group conversations
 - **History Sync**: Sync message history from WhatsApp servers
 - **Real-time Messaging**: Receive messages in real-time
+- **Database Flexibility**: Supports both SQLite (default) and PostgreSQL (via configuration)
 
 ## Prerequisites
 
 - Go 1.19 or higher
-- SQLite3
+- SQLite3 (default) or PostgreSQL (optional)
 
 ## Installation
 
 1. Clone the repository:
-```bash
-git clone <repository-url>
-cd whatsapp-bridge
-```
+   ```bash
+   git clone <repository-url>
+   cd whatsapp-bridge
+   ```
 
 2. Install dependencies:
-```bash
-cd whatsapp-bridge
-go mod tidy
-```
+   ```bash
+   cd whatsapp-bridge
+   go mod tidy
+   ```
 
 ## Usage
 
@@ -45,9 +52,9 @@ go run main.go qr_web.go
 
 The application will:
 1. Start the WhatsApp client
-2. Launch the web QR interface on port 3000
+2. Launch the web QR interface on port `3000`
 3. Display a QR code both in the web interface and terminal (backup)
-4. Start the REST API server on port 8080
+4. Start the REST API server on port `8080`
 5. Begin listening for incoming messages
 
 ### QR Code Authentication
@@ -56,7 +63,7 @@ The application will:
 1. Open your browser and navigate to `http://localhost:3000`
 2. You'll see a modern web interface with the QR code
 3. Open WhatsApp on your phone
-4. Go to Settings → Linked Devices → Link a Device
+4. Go to **Settings → Linked Devices → Link a Device**
 5. Scan the QR code from the web page
 6. The page will automatically update when connected
 
@@ -66,7 +73,7 @@ If you prefer the terminal, the QR code is also displayed there as a backup opti
 ### First Time Setup
 
 1. Run the application
-2. Scan the QR code with your WhatsApp mobile app (WhatsApp > Settings > Linked Devices > Link a Device)
+2. Scan the QR code with your WhatsApp mobile app (**WhatsApp > Settings > Linked Devices > Link a Device**)
 3. Once connected, the bridge will start receiving messages
 
 ## Ports and Services
@@ -89,7 +96,7 @@ The WhatsApp Bridge runs two services simultaneously:
 
 ### Send Message
 
-**POST** `/send`
+**POST** `/api/send`
 
 Send a text message or media file to a WhatsApp contact or group.
 
@@ -112,7 +119,7 @@ Send a text message or media file to a WhatsApp contact or group.
 
 ### Download Media
 
-**POST** `/download`
+**POST** `/api/download`
 
 Download media from a received message.
 
@@ -136,7 +143,7 @@ Download media from a received message.
 
 ### Get Messages
 
-**GET** `/messages?chat_jid=<chat_jid>&limit=<limit>`
+**GET** `/api/messages/<chat_jid>?limit=<limit>`
 
 Retrieve message history for a specific chat.
 
@@ -146,9 +153,15 @@ Retrieve message history for a specific chat.
 
 ### Get Chats
 
-**GET** `/chats`
+**GET** `/api/chats`
 
-Retrieve list of all chats with their last message timestamps.
+Retrieve a list of all chats with their last message timestamps.
+
+### Database Status
+
+**GET** `/api/db/status`
+
+Check the health and connection status of the database.
 
 ## Project Structure
 
@@ -180,7 +193,7 @@ The application creates two main tables:
 - `sender`: Message sender
 - `content`: Message content
 - `timestamp`: Message timestamp
-- `is_from_me`: Boolean indicating if message was sent by this client
+- `is_from_me`: Boolean indicating if the message was sent by this client
 - `media_type`: Type of media (if any)
 - `filename`: Original filename (for media)
 - Additional media metadata fields
@@ -188,10 +201,12 @@ The application creates two main tables:
 ## Configuration
 
 The application uses the following default settings:
-- **API Port**: 8080
-- **Database Path**: `store/messages.db`
+- **API Port**: `8080`
+- **Database Path**: `store/messages.db` (SQLite)
 - **Downloads Path**: `downloads/`
 - **Session Storage**: `store/device.db`
+
+To use PostgreSQL, configure the `config.toml` file in the `supabase/` directory.
 
 ## Troubleshooting
 
@@ -203,11 +218,11 @@ The application uses the following default settings:
    go run main.go
    ```
 
-2. **QR Code not displaying**: Ensure your terminal supports UTF-8 characters
+2. **QR Code not displaying**: Ensure your terminal supports UTF-8 characters.
 
-3. **Database errors**: Check that the `store/` directory is writable
+3. **Database errors**: Check that the `store/` directory is writable.
 
-4. **Connection issues**: Verify your internet connection and WhatsApp account status
+4. **Connection issues**: Verify your internet connection and WhatsApp account status.
 
 ### Logs
 
