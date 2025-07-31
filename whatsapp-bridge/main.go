@@ -1073,6 +1073,13 @@ func main() {
 	// Start the wrapper functionality to monitor health
 	StartWrapper()
 	
+	// Log webhook configuration
+	if webhookURL := os.Getenv("WEBHOOK_URL"); webhookURL != "" {
+		logger.Infof("Health monitoring webhook configured: %s", maskURL(webhookURL))
+	} else {
+		logger.Infof("No health monitoring webhook configured (WEBHOOK_URL not set)")
+	}
+	
 	// Initialize database adapter for Supabase/PostgreSQL with SQLite fallback
 	dbAdapter := NewDatabaseAdapter(logger)
 	container, err := dbAdapter.Initialize()
@@ -1630,4 +1637,41 @@ func placeholderWaveform(duration uint32) []byte {
 	}
 
 	return waveform
+}
+
+// maskURL masks sensitive parts of a URL for logging
+func maskURL(url string) string {
+	// Check if URL contains a token or key parameter
+	for _, param := range []string{"token=", "key=", "api_key=", "apikey=", "secret="} {
+		if idx := strings.Index(url, param); idx != -1 {
+			// Find the end of the parameter value
+			start := idx + len(param)
+			end := start
+			for end < len(url) && url[end] != '&' && url[end] != '#' {
+				end++
+			}
+			
+			// Replace the parameter value with asterisks
+			if end > start {
+				masked := url[:start] + "***" + url[end:]
+				url = masked
+			}
+		}
+	}
+	
+	// If URL contains basic auth, mask the credentials
+	if strings.Contains(url, "@") {
+		protoSplit := strings.Split(url, "://")
+		if len(protoSplit) > 1 {
+			proto := protoSplit[0]
+			rest := protoSplit[1]
+			
+			parts := strings.SplitN(rest, "@", 2)
+			if len(parts) == 2 {
+				url = proto + "://***:***@" + parts[1]
+			}
+		}
+	}
+	
+	return url
 }

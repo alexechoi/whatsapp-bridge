@@ -160,6 +160,49 @@ Retrieve a list of all chats with their last message timestamps.
 
 Check the health and connection status of the database.
 
+## Health Monitoring
+
+The WhatsApp Bridge includes built-in health monitoring that can send alerts via webhooks when the application's health status changes.
+
+### Health Endpoints
+
+- **GET** `/health`: Simple health check endpoint that returns 200 OK if the application is running
+- **GET** `/api/health`: Detailed health check that verifies WhatsApp connection status
+
+### Webhook Alerts
+
+When the `WEBHOOK_URL` environment variable is set, the application will send alerts to this URL when:
+
+1. The application transitions from healthy to unhealthy
+2. The application recovers from an unhealthy state
+
+Alerts are sent as JSON payloads with the following format:
+
+```json
+{
+  "status": "unhealthy",
+  "message": "WhatsApp Bridge detected as unhealthy",
+  "timestamp": "2023-07-15T12:34:56Z",
+  "app_name": "WhatsApp Bridge"
+}
+```
+
+To prevent flooding, alerts are rate-limited to one per minute.
+
+### Setting Up Webhooks
+
+You can use various services to receive webhook alerts:
+
+- **Slack**: Create an incoming webhook and use the URL
+- **Discord**: Create a webhook in your server settings
+- **Custom endpoint**: Set up your own HTTP endpoint to receive alerts
+
+Example with Docker:
+
+```bash
+docker run -p 8080:8080 -e WEBHOOK_URL="https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK" -v $(pwd)/store:/app/store whatsapp-bridge
+```
+
 ## Project Structure
 
 ```
@@ -200,6 +243,7 @@ The Docker container supports the following environment variables:
 
 - `PORT`: The port to run the server on (default: 8080)
 - `DATABASE_URL`: PostgreSQL connection string (optional, falls back to SQLite if not provided)
+- `WEBHOOK_URL`: URL to send health status alerts to (optional)
 
 ## Google Cloud Run Deployment
 
