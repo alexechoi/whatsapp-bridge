@@ -44,10 +44,23 @@ type Message struct {
 // Database handler for storing message history
 type MessageStore struct {
 	db *sql.DB
+	isPostgres bool
 }
 
 // Initialize message store
-func NewMessageStore() (*MessageStore, error) {
+func NewMessageStore(dbAdapter *DatabaseAdapter) (*MessageStore, error) {
+	// Check if we have a PostgreSQL connection from the adapter
+	if dbAdapter != nil && dbAdapter.dbURL != "" {
+		// Use the PostgreSQL database
+		db, err := dbAdapter.GetDB()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get PostgreSQL database connection: %v", err)
+		}
+		
+		return &MessageStore{db: db, isPostgres: true}, nil
+	}
+	
+	// Fallback to SQLite
 	// Create directory for database if it doesn't exist
 	if err := os.MkdirAll("store", 0755); err != nil {
 		return nil, fmt.Errorf("failed to create store directory: %v", err)
@@ -90,7 +103,7 @@ func NewMessageStore() (*MessageStore, error) {
 		return nil, fmt.Errorf("failed to create tables: %v", err)
 	}
 
-	return &MessageStore{db: db}, nil
+	return &MessageStore{db: db, isPostgres: false}, nil
 }
 
 // Close the database connection
@@ -100,10 +113,14 @@ func (store *MessageStore) Close() error {
 
 // Store a chat in the database
 func (store *MessageStore) StoreChat(jid, name string, lastMessageTime time.Time) error {
-	_, err := store.db.Exec(
-		"INSERT OR REPLACE INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)",
-		jid, name, lastMessageTime,
-	)
+	var query string
+	if store.isPostgres {
+		query = "INSERT INTO chats (jid, name, last_message_time) VALUES ($1, $2, $3) ON CONFLICT (jid) DO UPDATE SET name = $2, last_message_time = $3"
+	} else {
+		query = "INSERT OR REPLACE INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)"
+	}
+	
+	_, err := store.db.Exec(query, jid, name, lastMessageTime)
 	return err
 }
 
@@ -115,10 +132,23 @@ func (store *MessageStore) StoreMessage(id, chatJID, sender, content string, tim
 		return nil
 	}
 
-	_, err := store.db.Exec(
-		`INSERT OR REPLACE INTO messages 
+	var query string
+	if store.isPostgres {
+		query = `INSERT INTO messages 
 		(id, chat_jid, sender, content, timestamp, is_from_me, media_type, filename, url, media_key, file_sha256, file_enc_sha256, file_length) 
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		ON CONFLICT (id, chat_jid) DO UPDATE SET 
+		sender = $3, content = $4, timestamp = $5, is_from_me = $6, 
+		media_type = $7, filename = $8, url = $9, media_key = $10, 
+		file_sha256 = $11, file_enc_sha256 = $12, file_length = $13`
+	} else {
+		query = `INSERT OR REPLACE INTO messages 
+		(id, chat_jid, sender, content, timestamp, is_from_me, media_type, filename, url, media_key, file_sha256, file_enc_sha256, file_length) 
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	}
+	
+	_, err := store.db.Exec(
+		query,
 		id, chatJID, sender, content, timestamp, isFromMe, mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength,
 	)
 	return err
@@ -126,10 +156,14 @@ func (store *MessageStore) StoreMessage(id, chatJID, sender, content string, tim
 
 // Get messages from a chat
 func (store *MessageStore) GetMessages(chatJID string, limit int) ([]Message, error) {
-	rows, err := store.db.Query(
-		"SELECT sender, content, timestamp, is_from_me, media_type, filename FROM messages WHERE chat_jid = ? ORDER BY timestamp DESC LIMIT ?",
-		chatJID, limit,
-	)
+	var query string
+	if store.isPostgres {
+		query = "SELECT sender, content, timestamp, is_from_me, media_type, filename FROM messages WHERE chat_jid = $1 ORDER BY timestamp DESC LIMIT $2"
+	} else {
+		query = "SELECT sender, content, timestamp, is_from_me, media_type, filename FROM messages WHERE chat_jid = ? ORDER BY timestamp DESC LIMIT ?"
+	}
+	
+	rows, err := store.db.Query(query, chatJID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +186,14 @@ func (store *MessageStore) GetMessages(chatJID string, limit int) ([]Message, er
 
 // Get all chats
 func (store *MessageStore) GetChats() (map[string]time.Time, error) {
-	rows, err := store.db.Query("SELECT jid, last_message_time FROM chats ORDER BY last_message_time DESC")
+	var query string
+	if store.isPostgres {
+		query = "SELECT jid, last_message_time FROM chats ORDER BY last_message_time DESC"
+	} else {
+		query = "SELECT jid, last_message_time FROM chats ORDER BY last_message_time DESC"
+	}
+	
+	rows, err := store.db.Query(query)
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +263,7 @@ type SendMessageRequest struct {
 }
 
 // Function to send a WhatsApp message
-func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message string, mediaPath string) (bool, string) {
+func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message string, mediaPath string, messageStore *MessageStore) (bool, string) {
 	if !client.IsConnected() {
 		return false, "Not connected to WhatsApp"
 	}
@@ -249,6 +290,11 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 	}
 
 	msg := &waProto.Message{}
+	
+	// Variables to track media info for database storage
+	var mediaType, filename, url string
+	var mediaKey, fileSHA256, fileEncSHA256 []byte
+	var fileLength uint64
 
 	// Check if we have media to send
 	if mediaPath != "" {
@@ -309,9 +355,31 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 
 		fmt.Println("Media uploaded", resp)
 
-		// Create the appropriate message type based on media type
+		// Save media info for database storage
+		url = resp.URL
+		mediaKey = resp.MediaKey
+		fileSHA256 = resp.FileSHA256
+		fileEncSHA256 = resp.FileEncSHA256
+		fileLength = resp.FileLength
+		
+		// Set appropriate mediaType string for database
 		switch mediaType {
 		case whatsmeow.MediaImage:
+			mediaType = "image"
+		case whatsmeow.MediaVideo:
+			mediaType = "video"
+		case whatsmeow.MediaAudio:
+			mediaType = "audio"
+		case whatsmeow.MediaDocument:
+			mediaType = "document"
+		}
+		
+		// Set filename based on the original file
+		filename = filepath.Base(mediaPath)
+
+		// Create the appropriate message type based on media type
+		switch mediaType {
+		case "image":
 			msg.ImageMessage = &waProto.ImageMessage{
 				Caption:       proto.String(message),
 				Mimetype:      proto.String(mimeType),
@@ -322,7 +390,7 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 				FileSHA256:    resp.FileSHA256,
 				FileLength:    &resp.FileLength,
 			}
-		case whatsmeow.MediaAudio:
+		case "audio":
 			// Handle ogg audio files
 			var seconds uint32 = 30 // Default fallback
 			var waveform []byte = nil
@@ -352,7 +420,7 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 				PTT:           proto.Bool(true),
 				Waveform:      waveform,
 			}
-		case whatsmeow.MediaVideo:
+		case "video":
 			msg.VideoMessage = &waProto.VideoMessage{
 				Caption:       proto.String(message),
 				Mimetype:      proto.String(mimeType),
@@ -363,7 +431,7 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 				FileSHA256:    resp.FileSHA256,
 				FileLength:    &resp.FileLength,
 			}
-		case whatsmeow.MediaDocument:
+		case "document":
 			msg.DocumentMessage = &waProto.DocumentMessage{
 				Title:         proto.String(mediaPath[strings.LastIndex(mediaPath, "/")+1:]),
 				Caption:       proto.String(message),
@@ -381,10 +449,47 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 	}
 
 	// Send message
-	_, err = client.SendMessage(context.Background(), recipientJID, msg)
+	resp, err := client.SendMessage(context.Background(), recipientJID, msg)
 
 	if err != nil {
 		return false, fmt.Sprintf("Error sending message: %v", err)
+	}
+	
+	// Store the sent message in our database if we have a message store
+	if messageStore != nil {
+		// Get the chat name
+		chatJID := recipientJID.String()
+		// Create a simple logger for this operation
+		logger := waLog.Stdout("SendMessage", "INFO", true)
+		name := GetChatName(client, messageStore, recipientJID, chatJID, nil, "", logger)
+		
+		// Store the chat
+		timestamp := time.Now()
+		if err := messageStore.StoreChat(chatJID, name, timestamp); err != nil {
+			fmt.Printf("Failed to store chat for sent message: %v\n", err)
+		}
+		
+		// Store the message
+		sender := client.Store.ID.User // Our own JID user part
+		if err := messageStore.StoreMessage(
+			resp.ID,
+			chatJID,
+			sender,
+			message,
+			timestamp,
+			true, // IsFromMe = true for outbound messages
+			mediaType,
+			filename,
+			url,
+			mediaKey,
+			fileSHA256,
+			fileEncSHA256,
+			fileLength,
+		); err != nil {
+			fmt.Printf("Failed to store sent message: %v\n", err)
+		} else {
+			fmt.Printf("Stored outbound message in database: %s\n", message)
+		}
 	}
 
 	return true, fmt.Sprintf("Message sent to %s", recipient)
@@ -505,8 +610,15 @@ type DownloadMediaResponse struct {
 
 // Store additional media info in the database
 func (store *MessageStore) StoreMediaInfo(id, chatJID, url string, mediaKey, fileSHA256, fileEncSHA256 []byte, fileLength uint64) error {
+	var query string
+	if store.isPostgres {
+		query = "UPDATE messages SET url = $1, media_key = $2, file_sha256 = $3, file_enc_sha256 = $4, file_length = $5 WHERE id = $6 AND chat_jid = $7"
+	} else {
+		query = "UPDATE messages SET url = ?, media_key = ?, file_sha256 = ?, file_enc_sha256 = ?, file_length = ? WHERE id = ? AND chat_jid = ?"
+	}
+	
 	_, err := store.db.Exec(
-		"UPDATE messages SET url = ?, media_key = ?, file_sha256 = ?, file_enc_sha256 = ?, file_length = ? WHERE id = ? AND chat_jid = ?",
+		query,
 		url, mediaKey, fileSHA256, fileEncSHA256, fileLength, id, chatJID,
 	)
 	return err
@@ -517,11 +629,15 @@ func (store *MessageStore) GetMediaInfo(id, chatJID string) (string, string, str
 	var mediaType, filename, url string
 	var mediaKey, fileSHA256, fileEncSHA256 []byte
 	var fileLength uint64
+	
+	var query string
+	if store.isPostgres {
+		query = "SELECT media_type, filename, url, media_key, file_sha256, file_enc_sha256, file_length FROM messages WHERE id = $1 AND chat_jid = $2"
+	} else {
+		query = "SELECT media_type, filename, url, media_key, file_sha256, file_enc_sha256, file_length FROM messages WHERE id = ? AND chat_jid = ?"
+	}
 
-	err := store.db.QueryRow(
-		"SELECT media_type, filename, url, media_key, file_sha256, file_enc_sha256, file_length FROM messages WHERE id = ? AND chat_jid = ?",
-		id, chatJID,
-	).Scan(&mediaType, &filename, &url, &mediaKey, &fileSHA256, &fileEncSHA256, &fileLength)
+	err := store.db.QueryRow(query, id, chatJID).Scan(&mediaType, &filename, &url, &mediaKey, &fileSHA256, &fileEncSHA256, &fileLength)
 
 	return mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength, err
 }
@@ -589,10 +705,14 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 
 	if err != nil {
 		// Try to get basic info if extended info isn't available
-		err = messageStore.db.QueryRow(
-			"SELECT media_type, filename FROM messages WHERE id = ? AND chat_jid = ?",
-			messageID, chatJID,
-		).Scan(&mediaType, &filename)
+		var query string
+		if messageStore.isPostgres {
+			query = "SELECT media_type, filename FROM messages WHERE id = $1 AND chat_jid = $2"
+		} else {
+			query = "SELECT media_type, filename FROM messages WHERE id = ? AND chat_jid = ?"
+		}
+		
+		err = messageStore.db.QueryRow(query, messageID, chatJID).Scan(&mediaType, &filename)
 
 		if err != nil {
 			return false, "", "", "", fmt.Errorf("failed to find message: %v", err)
@@ -725,7 +845,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, dbAda
 		fmt.Println("Received request to send message", req.Message, req.MediaPath)
 
 		// Send the message
-		success, message := sendWhatsAppMessage(client, req.Recipient, req.Message, req.MediaPath)
+		success, message := sendWhatsAppMessage(client, req.Recipient, req.Message, req.MediaPath, messageStore)
 		fmt.Println("Message sent", success, message)
 		// Set response headers
 		w.Header().Set("Content-Type", "application/json")
@@ -943,7 +1063,7 @@ func main() {
 	}
 
 	// Initialize message store
-	messageStore, err := NewMessageStore()
+	messageStore, err := NewMessageStore(dbAdapter)
 	if err != nil {
 		logger.Errorf("Failed to initialize message store: %v", err)
 		return
@@ -1053,7 +1173,15 @@ func main() {
 func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types.JID, chatJID string, conversation interface{}, sender string, logger waLog.Logger) string {
 	// First, check if chat already exists in database with a name
 	var existingName string
-	err := messageStore.db.QueryRow("SELECT name FROM chats WHERE jid = ?", chatJID).Scan(&existingName)
+	var query string
+	
+	if messageStore.isPostgres {
+		query = "SELECT name FROM chats WHERE jid = $1"
+	} else {
+		query = "SELECT name FROM chats WHERE jid = ?"
+	}
+	
+	err := messageStore.db.QueryRow(query, chatJID).Scan(&existingName)
 	if err == nil && existingName != "" {
 		// Chat exists with a name, use that
 		logger.Infof("Using existing chat name for %s: %s", chatJID, existingName)
