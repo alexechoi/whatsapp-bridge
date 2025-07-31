@@ -263,7 +263,7 @@ type SendMessageRequest struct {
 }
 
 // Function to send a WhatsApp message
-func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message string, mediaPath string) (bool, string) {
+func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message string, mediaPath string, messageStore *MessageStore) (bool, string) {
 	if !client.IsConnected() {
 		return false, "Not connected to WhatsApp"
 	}
@@ -290,6 +290,11 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 	}
 
 	msg := &waProto.Message{}
+	
+	// Variables to track media info for database storage
+	var mediaType, filename, url string
+	var mediaKey, fileSHA256, fileEncSHA256 []byte
+	var fileLength uint64
 
 	// Check if we have media to send
 	if mediaPath != "" {
@@ -350,9 +355,31 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 
 		fmt.Println("Media uploaded", resp)
 
-		// Create the appropriate message type based on media type
+		// Save media info for database storage
+		url = resp.URL
+		mediaKey = resp.MediaKey
+		fileSHA256 = resp.FileSHA256
+		fileEncSHA256 = resp.FileEncSHA256
+		fileLength = resp.FileLength
+		
+		// Set appropriate mediaType string for database
 		switch mediaType {
 		case whatsmeow.MediaImage:
+			mediaType = "image"
+		case whatsmeow.MediaVideo:
+			mediaType = "video"
+		case whatsmeow.MediaAudio:
+			mediaType = "audio"
+		case whatsmeow.MediaDocument:
+			mediaType = "document"
+		}
+		
+		// Set filename based on the original file
+		filename = filepath.Base(mediaPath)
+
+		// Create the appropriate message type based on media type
+		switch mediaType {
+		case "image":
 			msg.ImageMessage = &waProto.ImageMessage{
 				Caption:       proto.String(message),
 				Mimetype:      proto.String(mimeType),
@@ -363,7 +390,7 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 				FileSHA256:    resp.FileSHA256,
 				FileLength:    &resp.FileLength,
 			}
-		case whatsmeow.MediaAudio:
+		case "audio":
 			// Handle ogg audio files
 			var seconds uint32 = 30 // Default fallback
 			var waveform []byte = nil
@@ -393,7 +420,7 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 				PTT:           proto.Bool(true),
 				Waveform:      waveform,
 			}
-		case whatsmeow.MediaVideo:
+		case "video":
 			msg.VideoMessage = &waProto.VideoMessage{
 				Caption:       proto.String(message),
 				Mimetype:      proto.String(mimeType),
@@ -404,7 +431,7 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 				FileSHA256:    resp.FileSHA256,
 				FileLength:    &resp.FileLength,
 			}
-		case whatsmeow.MediaDocument:
+		case "document":
 			msg.DocumentMessage = &waProto.DocumentMessage{
 				Title:         proto.String(mediaPath[strings.LastIndex(mediaPath, "/")+1:]),
 				Caption:       proto.String(message),
@@ -422,10 +449,47 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 	}
 
 	// Send message
-	_, err = client.SendMessage(context.Background(), recipientJID, msg)
+	resp, err := client.SendMessage(context.Background(), recipientJID, msg)
 
 	if err != nil {
 		return false, fmt.Sprintf("Error sending message: %v", err)
+	}
+	
+	// Store the sent message in our database if we have a message store
+	if messageStore != nil {
+		// Get the chat name
+		chatJID := recipientJID.String()
+		// Create a simple logger for this operation
+		logger := waLog.Stdout("SendMessage", "INFO", true)
+		name := GetChatName(client, messageStore, recipientJID, chatJID, nil, "", logger)
+		
+		// Store the chat
+		timestamp := time.Now()
+		if err := messageStore.StoreChat(chatJID, name, timestamp); err != nil {
+			fmt.Printf("Failed to store chat for sent message: %v\n", err)
+		}
+		
+		// Store the message
+		sender := client.Store.ID.User // Our own JID user part
+		if err := messageStore.StoreMessage(
+			resp.ID,
+			chatJID,
+			sender,
+			message,
+			timestamp,
+			true, // IsFromMe = true for outbound messages
+			mediaType,
+			filename,
+			url,
+			mediaKey,
+			fileSHA256,
+			fileEncSHA256,
+			fileLength,
+		); err != nil {
+			fmt.Printf("Failed to store sent message: %v\n", err)
+		} else {
+			fmt.Printf("Stored outbound message in database: %s\n", message)
+		}
 	}
 
 	return true, fmt.Sprintf("Message sent to %s", recipient)
@@ -781,7 +845,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, dbAda
 		fmt.Println("Received request to send message", req.Message, req.MediaPath)
 
 		// Send the message
-		success, message := sendWhatsAppMessage(client, req.Recipient, req.Message, req.MediaPath)
+		success, message := sendWhatsAppMessage(client, req.Recipient, req.Message, req.MediaPath, messageStore)
 		fmt.Println("Message sent", success, message)
 		// Set response headers
 		w.Header().Set("Content-Type", "application/json")
