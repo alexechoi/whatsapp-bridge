@@ -10,12 +10,10 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -233,8 +231,8 @@ func extractTextContent(msg *waProto.Message) string {
 // CORS middleware to allow cross-origin requests
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Allow requests from our web interface
-		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
+		// Allow requests from any origin when running in Cloud Run
+		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
@@ -1009,16 +1007,56 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, dbAda
 		json.NewEncoder(w).Encode(messages)
 	})
 
+	// Handler for health check
+	http.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+		// Only allow GET requests
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Check WhatsApp client connection status
+		isConnected := client.IsConnected()
+		response := map[string]interface{}{
+			"connected": isConnected,
+			"message":   "WhatsApp client is connected.",
+		}
+
+		if !isConnected {
+			response["message"] = "WhatsApp client is not connected. Please refresh credentials."
+		}
+
+		// Set response headers
+		w.Header().Set("Content-Type", "application/json")
+		
+		// Send response
+		json.NewEncoder(w).Encode(response)
+	})
+
+	// Add wrapper health endpoint
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		if client.IsConnected() {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("Main application is live."))
+		} else {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("Main application is not live."))
+		}
+	})
+
 	// Start the server
-	serverAddr := fmt.Sprintf(":%d", port)
+	serverPort := os.Getenv("PORT")
+	if serverPort == "" {
+		serverPort = strconv.Itoa(port)
+	}
+	
+	serverAddr := fmt.Sprintf(":%s", serverPort)
 	fmt.Printf("Starting REST API server on %s...\n", serverAddr)
 
-	// Run server in a goroutine so it doesn't block
-	go func() {
-		if err := http.ListenAndServe(serverAddr, corsMiddleware(http.DefaultServeMux)); err != nil {
-			fmt.Printf("REST API server error: %v\n", err)
-		}
-	}()
+	// Run server in the main goroutine since we're now consolidating everything
+	if err := http.ListenAndServe(serverAddr, corsMiddleware(http.DefaultServeMux)); err != nil {
+		fmt.Printf("REST API server error: %v\n", err)
+	}
 }
 
 func main() {
@@ -1028,8 +1066,13 @@ func main() {
 
 	// Initialize QR web server
 	qrWebServer := NewQRWebServer()
-	qrWebServer.StartQRWebServer(3000)
-
+	
+	// Register QR web routes to the default HTTP mux
+	qrWebServer.RegisterRoutes()
+	
+	// Start the wrapper functionality to monitor health
+	StartWrapper()
+	
 	// Initialize database adapter for Supabase/PostgreSQL with SQLite fallback
 	dbAdapter := NewDatabaseAdapter(logger)
 	container, err := dbAdapter.Initialize()
@@ -1103,7 +1146,7 @@ func main() {
 		}
 
 		// Handle QR code for pairing with phone
-		fmt.Printf("\n🌐 QR Code available at: http://localhost:3000\n")
+		fmt.Printf("\n🌐 QR Code available at: http://localhost:8080\n")
 		fmt.Println("Open the URL in your browser to scan the QR code with WhatsApp")
 		
 		for evt := range qrChan {
@@ -1152,21 +1195,8 @@ func main() {
 
 	fmt.Println("\n✓ Connected to WhatsApp! Type 'help' for commands.")
 
-	// Start REST API server
+	// Start REST API server - this will now run in the main goroutine
 	startRESTServer(client, messageStore, dbAdapter, 8080)
-
-	// Create a channel to keep the main goroutine alive
-	exitChan := make(chan os.Signal, 1)
-	signal.Notify(exitChan, syscall.SIGINT, syscall.SIGTERM)
-
-	fmt.Println("REST server is running. Press Ctrl+C to disconnect and exit.")
-
-	// Wait for termination signal
-	<-exitChan
-
-	fmt.Println("Disconnecting...")
-	// Disconnect client
-	client.Disconnect()
 }
 
 // GetChatName determines the appropriate name for a chat based on JID and other info

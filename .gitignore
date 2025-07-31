@@ -208,4 +208,11 @@ __marimo__/
 
 # Internal Fall Store
 whatsapp-bridge/store
+store/
+*.db
+*.sqlite
+*.sqlite3
+
+# WhatsApp Bridge specific
+whatsapp-bridge/*.db
 
