@@ -1,10 +1,11 @@
 # WhatsApp Bridge
 
-![Go Version](https://img.shields.io/badge/Go-1.19%2B-blue)
-![SQLite](https://img.shields.io/badge/Database-SQLite-lightgrey)
-![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL-blue)
-![REST API](https://img.shields.io/badge/API-REST-green)
-![License](https://img.shields.io/badge/License-MIT-yellow)
+![Go](https://img.shields.io/badge/Go-1.19%2B-blue?style=for-the-badge&logo=go&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-Database-lightgrey?style=for-the-badge&logo=sqlite&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Database-336791?style=for-the-badge&logo=postgresql&logoColor=white)
+![REST API](https://img.shields.io/badge/REST-API-green?style=for-the-badge&logo=fastapi&logoColor=white)
+![WhatsApp](https://img.shields.io/badge/WhatsApp-Integration-25D366?style=for-the-badge&logo=whatsapp&logoColor=white)
+![MIT License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)
 
 A production-ready WhatsApp bridge built with Go that provides a REST API interface for WhatsApp messaging using the `whatsmeow` library. This bridge allows you to send and receive WhatsApp messages programmatically while maintaining message history in a local SQLite database or a PostgreSQL database.
 
@@ -166,83 +167,3 @@ Check the health and connection status of the database.
 ## Project Structure
 
 ```
-whatsapp-bridge/
-├── whatsapp-bridge/
-│   ├── main.go          # Main application file
-│   ├── go.mod           # Go module dependencies
-│   └── go.sum           # Go module checksums
-├── store/               # Created at runtime
-│   ├── messages.db      # SQLite database for messages
-│   └── device.db        # WhatsApp session storage
-├── downloads/           # Created at runtime for media downloads
-└── README.md
-```
-
-## Database Schema
-
-The application creates two main tables:
-
-### Chats Table
-- `jid`: Chat identifier (PRIMARY KEY)
-- `name`: Chat name
-- `last_message_time`: Timestamp of last message
-
-### Messages Table
-- `id`: Message ID
-- `chat_jid`: Chat identifier (FOREIGN KEY)
-- `sender`: Message sender
-- `content`: Message content
-- `timestamp`: Message timestamp
-- `is_from_me`: Boolean indicating if the message was sent by this client
-- `media_type`: Type of media (if any)
-- `filename`: Original filename (for media)
-- Additional media metadata fields
-
-## Configuration
-
-The application uses the following default settings:
-- **API Port**: `8080`
-- **Database Path**: `store/messages.db` (SQLite)
-- **Downloads Path**: `downloads/`
-- **Session Storage**: `store/device.db`
-
-To use PostgreSQL, configure the `config.toml` file in the `supabase/` directory.
-
-## Troubleshooting
-
-### Common Issues
-
-1. **"no such file or directory" error**: Make sure you're running the command from the correct directory:
-   ```bash
-   cd whatsapp-bridge
-   go run main.go
-   ```
-
-2. **QR Code not displaying**: Ensure your terminal supports UTF-8 characters.
-
-3. **Database errors**: Check that the `store/` directory is writable.
-
-4. **Connection issues**: Verify your internet connection and WhatsApp account status.
-
-### Logs
-
-The application provides detailed logging for:
-- Message sending/receiving
-- Database operations
-- API requests
-- Connection status
-
-## Dependencies
-
-Key dependencies include:
-- `go.mau.fi/whatsmeow`: WhatsApp Web API library
-- `github.com/mattn/go-sqlite3`: SQLite driver
-- `github.com/mdp/qrterminal`: QR code terminal display
-
-## License
-
-MIT License
-
-## Contributing
-
-PRs welcome!
