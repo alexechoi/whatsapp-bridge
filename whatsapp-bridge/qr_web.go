@@ -383,13 +383,13 @@ func (q *QRWebServer) ServeQRPage(w http.ResponseWriter, r *http.Request) {
             messageList.innerHTML = '<div class="loading">Loading messages...</div>';
             
             // Get list of chats first
-            fetch('http://localhost:8080/api/chats')
+            fetch('/api/chats')
                 .then(response => response.json())
                 .then(chats => {
                     if (chats && Object.keys(chats).length > 0) {
                         // Get the first chat's messages as a sample
                         const firstChatJID = Object.keys(chats)[0];
-                        return fetch('http://localhost:8080/api/messages/' + encodeURIComponent(firstChatJID) + '?limit=10');
+                        return fetch('/api/messages/' + encodeURIComponent(firstChatJID) + '?limit=10');
                     } else {
                         throw new Error('No chats found');
                     }
@@ -413,7 +413,7 @@ func (q *QRWebServer) ServeQRPage(w http.ResponseWriter, r *http.Request) {
                 })
                 .catch(err => {
                     console.error('Error loading messages:', err);
-                    messageList.innerHTML = '<div class="error">Failed to load messages. Make sure the API is running on port 8080.</div>';
+                    messageList.innerHTML = '<div class="error">Failed to load messages. Make sure the API is running.</div>';
                 });
         }
         
@@ -432,7 +432,7 @@ func (q *QRWebServer) ServeQRPage(w http.ResponseWriter, r *http.Request) {
             sendBtn.textContent = 'Sending...';
             resultDiv.innerHTML = '';
             
-            fetch('http://localhost:8080/api/send', {
+            fetch('/api/send', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -455,7 +455,7 @@ func (q *QRWebServer) ServeQRPage(w http.ResponseWriter, r *http.Request) {
             })
             .catch(err => {
                 console.error('Error sending message:', err);
-                resultDiv.innerHTML = '<div class="error">&#x274C; Network error. Make sure the API is running on port 8080.</div>';
+                resultDiv.innerHTML = '<div class="error">&#x274C; Network error. Make sure the API is running.</div>';
             })
             .finally(() => {
                 sendBtn.disabled = false;
@@ -537,12 +537,18 @@ func (q *QRWebServer) ServeQRStatus(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// StartQRWebServer starts the QR web server
-func (q *QRWebServer) StartQRWebServer(port int) {
+// RegisterRoutes registers the QR web server routes to the default HTTP mux
+func (q *QRWebServer) RegisterRoutes() {
 	http.HandleFunc("/", q.ServeQRPage)
 	http.HandleFunc("/qr/image", q.ServeQRImage)
 	http.HandleFunc("/qr/status", q.ServeQRStatus)
 	
-	fmt.Printf("QR Web Server starting on http://localhost:%d\n", port)
-	go http.ListenAndServe(fmt.Sprintf(":%d", port), nil)
+	fmt.Println("QR Web Server routes registered")
+}
+
+// StartQRWebServer starts the QR web server (legacy method, kept for compatibility)
+func (q *QRWebServer) StartQRWebServer(port int) {
+	// Instead of starting a separate server, just register routes
+	q.RegisterRoutes()
+	fmt.Printf("QR Web Server routes registered (legacy port %d ignored)\n", port)
 }

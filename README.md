@@ -48,12 +48,12 @@ From the project root directory:
 
 ```bash
 cd whatsapp-bridge
-go run main.go qr_web.go
+go run main.go database.go qr_web.go
 ```
 
 The application will:
 1. Start the WhatsApp client
-2. Launch the web QR interface on port `3000`
+2. Launch the web QR interface
 3. Display a QR code both in the web interface and terminal (backup)
 4. Start the REST API server on port `8080`
 5. Begin listening for incoming messages
@@ -61,7 +61,7 @@ The application will:
 ### QR Code Authentication
 
 #### Web Interface (Recommended)
-1. Open your browser and navigate to `http://localhost:3000`
+1. Open your browser and navigate to `http://localhost:8080`
 2. You'll see a modern web interface with the QR code
 3. Open WhatsApp on your phone
 4. Go to **Settings → Linked Devices → Link a Device**
@@ -79,19 +79,15 @@ If you prefer the terminal, the QR code is also displayed there as a backup opti
 
 ## Ports and Services
 
-The WhatsApp Bridge runs two services simultaneously:
+The WhatsApp Bridge runs all services on a single port:
 
-- **Web QR Interface**: `http://localhost:3000`
+- **Combined Service**: `http://localhost:8080`
   - Modern web interface for QR code authentication
-  - Auto-refreshing status updates
-  - Mobile-friendly responsive design
+  - REST API for sending messages, downloading media, etc.
+  - Health check endpoint
   - Real-time connection status
 
-- **REST API Server**: `http://localhost:8080`
-  - Send messages via HTTP POST requests
-  - Download media files
-  - Retrieve message history
-  - All programmatic WhatsApp operations
+This consolidated approach makes the application ideal for deployment on platforms like Google Cloud Run that require a single port.
 
 ## API Endpoints
 
@@ -167,3 +163,87 @@ Check the health and connection status of the database.
 ## Project Structure
 
 ```
+whatsapp-bridge/
+├── main.go         # Main application code
+├── qr_web.go       # QR web interface
+├── database.go     # Database adapter
+├── Dockerfile      # Docker container definition
+└── store/          # Local storage directory
+```
+
+## Docker Deployment
+
+### Building the Docker Image
+
+To build the Docker image:
+
+```bash
+cd whatsapp-bridge
+docker build -t whatsapp-bridge .
+```
+
+### Running the Docker Container
+
+To run the Docker container:
+
+```bash
+docker run -p 8080:8080 -v $(pwd)/store:/app/store whatsapp-bridge
+```
+
+This will:
+- Map port 8080 from the container to your host machine
+- Mount the local `store` directory to persist data between container restarts
+
+### Environment Variables
+
+The Docker container supports the following environment variables:
+
+- `PORT`: The port to run the server on (default: 8080)
+- `DATABASE_URL`: PostgreSQL connection string (optional, falls back to SQLite if not provided)
+
+## Google Cloud Run Deployment
+
+To deploy to Google Cloud Run:
+
+1. Build and push the Docker image to Google Container Registry:
+
+```bash
+# Set your Google Cloud project ID
+PROJECT_ID=your-project-id
+
+# Build the image with Google Cloud Build
+gcloud builds submit --tag gcr.io/$PROJECT_ID/whatsapp-bridge
+
+# Or build locally and push
+docker build -t gcr.io/$PROJECT_ID/whatsapp-bridge .
+docker push gcr.io/$PROJECT_ID/whatsapp-bridge
+```
+
+2. Deploy to Cloud Run:
+
+```bash
+gcloud run deploy whatsapp-bridge \
+  --image gcr.io/$PROJECT_ID/whatsapp-bridge \
+  --platform managed \
+  --allow-unauthenticated \
+  --region us-central1 \
+  --memory 512Mi
+```
+
+3. For persistence, consider:
+   - Using a PostgreSQL database (set `DATABASE_URL` environment variable)
+   - Mounting a persistent volume (for production use)
+
+### Important Cloud Run Considerations
+
+1. **Session Persistence**: WhatsApp sessions need to persist between container restarts. Use PostgreSQL for session storage in production.
+
+2. **QR Code Access**: When deploying to Cloud Run, you'll access the QR code via the deployed URL.
+
+3. **Timeouts**: Configure Cloud Run with appropriate request timeout settings (recommended: 5-10 minutes) to handle long-running operations.
+
+4. **Memory**: Allocate at least 512MB of memory to ensure stable operation.
+
+## License
+
+MIT License
