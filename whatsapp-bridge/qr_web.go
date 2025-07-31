@@ -401,9 +401,9 @@ func (q *QRWebServer) ServeQRPage(w http.ResponseWriter, r *http.Request) {
                         messages.forEach(msg => {
                             const time = new Date(msg.time).toLocaleString();
                             html += '<div class="message-item">' +
-                                   '<div class="message-sender">' + (msg.sender || 'Unknown') + '</div>' +
-                                   '<div class="message-time">' + time + '</div>' +
-                                   '<div class="message-content">' + (msg.content || '[Media]') + '</div>' +
+                                   '<div class="message-sender">' + (msg.Sender || 'Unknown') + '</div>' +
+                                   '<div class="message-time">' + msg.Time + '</div>' +
+                                   '<div class="message-content">' + (msg.Content || '[Media]') + '</div>' +
                                    '</div>';
                         });
                         messageList.innerHTML = html;
