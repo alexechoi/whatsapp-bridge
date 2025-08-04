@@ -448,7 +448,6 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 
 	// Send message with retry logic
 	var resp whatsmeow.SendResponse
-	var err error
 	const maxRetries = 3
 	const initialBackoff = 2 * time.Second
 
