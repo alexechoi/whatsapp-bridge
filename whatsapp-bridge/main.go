@@ -446,11 +446,33 @@ func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message str
 		msg.Conversation = proto.String(message)
 	}
 
-	// Send message
-	resp, err := client.SendMessage(context.Background(), recipientJID, msg)
+	// Send message with retry logic
+	var resp whatsmeow.SendResponse
+	var err error
+	const maxRetries = 3
+	const initialBackoff = 2 * time.Second
+
+	for i := 0; i < maxRetries; i++ {
+		resp, err = client.SendMessage(context.Background(), recipientJID, msg)
+		if err == nil {
+			// Success, break the loop
+			break
+		}
+
+		// Check if the error is the specific timeout error we want to retry
+		if strings.Contains(err.Error(), "info query timed out") {
+			// This is a retryable error
+			wait := initialBackoff * time.Duration(math.Pow(2, float64(i)))
+			fmt.Printf("Attempt %d/%d failed: %v. Retrying in %v...\n", i+1, maxRetries, err, wait)
+			time.Sleep(wait)
+		} else {
+			// Not a retryable error, so break the loop
+			break
+		}
+	}
 
 	if err != nil {
-		return false, fmt.Sprintf("Error sending message: %v", err)
+		return false, fmt.Sprintf("Error sending message after %d retries: %v", maxRetries, err)
 	}
 	
 	// Store the sent message in our database if we have a message store
