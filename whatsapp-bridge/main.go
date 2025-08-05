@@ -260,6 +260,20 @@ type SendMessageRequest struct {
 	MediaPath string `json:"media_path,omitempty"`
 }
 
+// IncomingMessageWebhookPayload represents the payload sent to the webhook for incoming messages
+type IncomingMessageWebhookPayload struct {
+	MessageID   string    `json:"message_id"`
+	FromNumber  string    `json:"from_number"`
+	ChatJID     string    `json:"chat_jid"`
+	Sender      string    `json:"sender"`
+	Content     string    `json:"content"`
+	Timestamp   time.Time `json:"timestamp"`
+	IsFromMe    bool      `json:"is_from_me"`
+	MediaType   string    `json:"media_type,omitempty"`
+	Filename    string    `json:"filename,omitempty"`
+	ChatName    string    `json:"chat_name,omitempty"`
+}
+
 // Function to send a WhatsApp message
 func sendWhatsAppMessage(client *whatsmeow.Client, recipient string, message string, mediaPath string, messageStore *MessageStore) (bool, string) {
 	if !client.IsConnected() {
@@ -551,6 +565,54 @@ func extractMediaInfo(msg *waProto.Message) (mediaType string, filename string, 
 	return "", "", "", nil, nil, nil, 0
 }
 
+// sendIncomingMessageWebhook sends a webhook notification for incoming messages
+func sendIncomingMessageWebhook(payload IncomingMessageWebhookPayload, logger waLog.Logger) {
+	webhookURL := os.Getenv("INCOMING_MESSAGE_WEBHOOK_URL")
+	if webhookURL == "" {
+		// No webhook URL configured, skip
+		return
+	}
+
+	// Convert payload to JSON
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		logger.Errorf("Failed to marshal webhook payload: %v", err)
+		return
+	}
+
+	// Create HTTP request
+	req, err := http.NewRequest("POST", webhookURL, bytes.NewBuffer(jsonData))
+	if err != nil {
+		logger.Errorf("Failed to create webhook request: %v", err)
+		return
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "WhatsApp-Bridge/1.0")
+
+	// Create HTTP client with timeout
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	// Send the request in a goroutine to avoid blocking message processing
+	go func() {
+		resp, err := client.Do(req)
+		if err != nil {
+			logger.Errorf("Failed to send webhook: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			logger.Infof("Webhook sent successfully to %s (status: %d)", webhookURL, resp.StatusCode)
+		} else {
+			logger.Warnf("Webhook returned non-success status: %d", resp.StatusCode)
+		}
+	}()
+}
+
 // Handle regular incoming messages with media support
 func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *events.Message, logger waLog.Logger) {
 	// Save message to database
@@ -609,6 +671,29 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 			fmt.Printf("[%s] %s %s: [%s: %s] %s\n", timestamp, direction, sender, mediaType, filename, content)
 		} else if content != "" {
 			fmt.Printf("[%s] %s %s: %s\n", timestamp, direction, sender, content)
+		}
+
+		// Send webhook for incoming messages (not from me)
+		if !msg.Info.IsFromMe {
+			// Extract from number (sender without server part)
+			fromNumber := msg.Info.Sender.User
+			
+			// Create webhook payload
+			webhookPayload := IncomingMessageWebhookPayload{
+				MessageID:  msg.Info.ID,
+				FromNumber: fromNumber,
+				ChatJID:    chatJID,
+				Sender:     sender,
+				Content:    content,
+				Timestamp:  msg.Info.Timestamp,
+				IsFromMe:   msg.Info.IsFromMe,
+				MediaType:  mediaType,
+				Filename:   filename,
+				ChatName:   name,
+			}
+
+			// Send webhook notification
+			sendIncomingMessageWebhook(webhookPayload, logger)
 		}
 	}
 }
