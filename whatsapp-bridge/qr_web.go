@@ -5,8 +5,12 @@ import (
 	"fmt"
 	"image/png"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
+	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/skip2/go-qrcode"
 )
 
@@ -15,11 +19,16 @@ type QRWebServer struct {
 	currentQRCode string
 	qrMutex       sync.RWMutex
 	isConnected   bool
+	jwtSecret     string
+	supabaseURL   string
 }
 
 // NewQRWebServer creates a new QR web server instance
 func NewQRWebServer() *QRWebServer {
-	return &QRWebServer{}
+	return &QRWebServer{
+		jwtSecret:   os.Getenv("SUPABASE_JWT_SECRET"),
+		supabaseURL: os.Getenv("SUPABASE_URL"),
+	}
 }
 
 // UpdateQRCode updates the current QR code
@@ -43,6 +52,76 @@ func (q *QRWebServer) GetQRCode() (string, bool) {
 	q.qrMutex.RLock()
 	defer q.qrMutex.RUnlock()
 	return q.currentQRCode, q.isConnected
+}
+
+// getTokenFromRequest extracts JWT token from request (cookie or Authorization header)
+func (q *QRWebServer) getTokenFromRequest(r *http.Request) string {
+	// First try Authorization header
+	auth := r.Header.Get("Authorization")
+	if auth != "" && strings.HasPrefix(auth, "Bearer ") {
+		return strings.TrimPrefix(auth, "Bearer ")
+	}
+	
+	// Then try cookie
+	cookie, err := r.Cookie("sb-access-token")
+	if err == nil {
+		return cookie.Value
+	}
+	
+	return ""
+}
+
+// validateSupabaseJWT validates a Supabase JWT token
+func (q *QRWebServer) validateSupabaseJWT(tokenString string) bool {
+	if tokenString == "" || q.jwtSecret == "" {
+		return false
+	}
+	
+	// Parse the token
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		// Verify the signing method
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(q.jwtSecret), nil
+	})
+	
+	if err != nil {
+		return false
+	}
+	
+	// Check if token is valid and not expired
+	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
+		// Check expiration
+		if exp, ok := claims["exp"].(float64); ok {
+			if time.Now().Unix() > int64(exp) {
+				return false
+			}
+		}
+		return true
+	}
+	
+	return false
+}
+
+// authMiddleware wraps HTTP handlers with authentication
+func (q *QRWebServer) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Skip auth if no JWT secret is configured (development mode)
+		if q.jwtSecret == "" {
+			next(w, r)
+			return
+		}
+		
+		token := q.getTokenFromRequest(r)
+		if !q.validateSupabaseJWT(token) {
+			// Redirect to login page
+			http.Redirect(w, r, "/login", http.StatusTemporaryRedirect)
+			return
+		}
+		
+		next(w, r)
+	}
 }
 
 // ServeQRPage serves the main QR code page or dashboard
@@ -483,6 +562,219 @@ func (q *QRWebServer) ServeQRPage(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(tmpl))
 }
 
+// ServeLoginPage serves the login page with Supabase Auth
+func (q *QRWebServer) ServeLoginPage(w http.ResponseWriter, r *http.Request) {
+	// If already authenticated, redirect to main page
+	token := q.getTokenFromRequest(r)
+	if q.validateSupabaseJWT(token) {
+		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
+		return
+	}
+	
+	loginTmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Login - WhatsApp Bridge</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+        }
+        .logo {
+            font-size: 3em;
+            color: #25D366;
+            margin-bottom: 10px;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 1.8em;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+        .auth-container {
+            margin: 20px 0;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border: 1px solid #f5c6cb;
+        }
+        .info {
+            background: #d1ecf1;
+            color: #0c5460;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border: 1px solid #bee5eb;
+        }
+    </style>
+    <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+</head>
+<body>
+    <div class="login-container">
+        <div class="logo">📱</div>
+        <h1>WhatsApp Bridge</h1>
+        <p class="subtitle">Please log in to access the QR code interface</p>
+        
+        <div id="auth-status" class="info">Initializing authentication...</div>
+        <div id="auth-container" class="auth-container"></div>
+    </div>
+
+    <script>
+        // Initialize Supabase
+        const supabaseUrl = '` + q.supabaseURL + `';
+        const supabaseKey = 'YOUR_SUPABASE_ANON_KEY'; // You'll need to set this
+        
+        if (!supabaseUrl) {
+            document.getElementById('auth-status').innerHTML = 
+                '<div class="error">Supabase URL not configured. Please set SUPABASE_URL environment variable.</div>';
+        } else {
+            // For now, show a simple redirect to Supabase hosted auth
+            document.getElementById('auth-status').innerHTML = 
+                '<div class="info">Click the button below to log in via Supabase</div>';
+            
+            document.getElementById('auth-container').innerHTML = 
+                '<a href="' + supabaseUrl + '/auth/v1/authorize?provider=email&redirect_to=' + 
+                encodeURIComponent(window.location.origin + '/auth/callback') + 
+                '" style="display: inline-block; background: #25D366; color: white; padding: 12px 24px; ' +
+                'text-decoration: none; border-radius: 25px; font-weight: 500; margin: 10px;">Login with Supabase</a>';
+        }
+        
+        // Check for auth callback
+        const urlParams = new URLSearchParams(window.location.search);
+        const accessToken = urlParams.get('access_token');
+        
+        if (accessToken) {
+            // Store token in cookie and redirect
+            document.cookie = 'sb-access-token=' + accessToken + '; path=/; max-age=3600';
+            window.location.href = '/';
+        }
+    </script>
+</body>
+</html>`
+
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(loginTmpl))
+}
+
+// ServeAuthCallback handles the Supabase auth callback
+func (q *QRWebServer) ServeAuthCallback(w http.ResponseWriter, r *http.Request) {
+	// Extract access token from URL fragment (handled by JavaScript on login page)
+	// This endpoint mainly serves as a landing page for the auth flow
+	callbackTmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Authentication - WhatsApp Bridge</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .callback-container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+        }
+        .logo {
+            font-size: 3em;
+            color: #25D366;
+            margin-bottom: 10px;
+        }
+        .status {
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+            font-weight: 500;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+    </style>
+</head>
+<body>
+    <div class="callback-container">
+        <div class="logo">🔐</div>
+        <h1>Authentication</h1>
+        <div id="status" class="status">Processing authentication...</div>
+    </div>
+
+    <script>
+        // Extract token from URL fragment
+        const hash = window.location.hash.substring(1);
+        const params = new URLSearchParams(hash);
+        const accessToken = params.get('access_token');
+        const error = params.get('error');
+        
+        if (error) {
+            document.getElementById('status').className = 'status error';
+            document.getElementById('status').textContent = 'Authentication failed: ' + error;
+        } else if (accessToken) {
+            // Store token in cookie
+            document.cookie = 'sb-access-token=' + accessToken + '; path=/; max-age=3600; secure; samesite=strict';
+            document.getElementById('status').className = 'status success';
+            document.getElementById('status').textContent = 'Authentication successful! Redirecting...';
+            
+            // Redirect to main page after a short delay
+            setTimeout(() => {
+                window.location.href = '/';
+            }, 2000);
+        } else {
+            document.getElementById('status').className = 'status error';
+            document.getElementById('status').textContent = 'No authentication token received.';
+        }
+    </script>
+</body>
+</html>`
+
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(callbackTmpl))
+}
+
 // ServeQRImage serves the QR code as a PNG image
 func (q *QRWebServer) ServeQRImage(w http.ResponseWriter, r *http.Request) {
 	code, connected := q.GetQRCode()
@@ -539,11 +831,16 @@ func (q *QRWebServer) ServeQRStatus(w http.ResponseWriter, r *http.Request) {
 
 // RegisterRoutes registers the QR web server routes to the default HTTP mux
 func (q *QRWebServer) RegisterRoutes() {
-	http.HandleFunc("/", q.ServeQRPage)
-	http.HandleFunc("/qr/image", q.ServeQRImage)
-	http.HandleFunc("/qr/status", q.ServeQRStatus)
+	// Protected routes (require authentication)
+	http.HandleFunc("/", q.authMiddleware(q.ServeQRPage))
+	http.HandleFunc("/qr/image", q.authMiddleware(q.ServeQRImage))
+	http.HandleFunc("/qr/status", q.authMiddleware(q.ServeQRStatus))
 	
-	fmt.Println("QR Web Server routes registered")
+	// Public routes (no authentication required)
+	http.HandleFunc("/login", q.ServeLoginPage)
+	http.HandleFunc("/auth/callback", q.ServeAuthCallback)
+	
+	fmt.Println("QR Web Server routes registered with authentication")
 }
 
 // StartQRWebServer starts the QR web server (legacy method, kept for compatibility)

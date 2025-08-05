@@ -39,5 +39,9 @@ EXPOSE 8080
 # Set environment variable for port
 ENV PORT=8080
 
+# Set Supabase environment variables (to be overridden at runtime)
+ENV SUPABASE_URL=""
+ENV SUPABASE_JWT_SECRET=""
+
 # Run the application
 CMD ["/app/whatsapp-bridge"]
