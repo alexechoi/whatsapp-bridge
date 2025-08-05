@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"image/png"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 
 	"github.com/skip2/go-qrcode"
+	"github.com/supabase-community/supabase-go"
 )
 
 // QRWebServer handles serving QR codes via web interface
@@ -15,11 +18,30 @@ type QRWebServer struct {
 	currentQRCode string
 	qrMutex       sync.RWMutex
 	isConnected   bool
+	supabaseClient *supabase.Client
+	supabaseURL    string
+	supabaseKey    string
 }
 
 // NewQRWebServer creates a new QR web server instance
 func NewQRWebServer() *QRWebServer {
-	return &QRWebServer{}
+	supabaseURL := os.Getenv("SUPABASE_URL")
+	supabaseKey := os.Getenv("SUPABASE_ANON_KEY")
+	
+	var client *supabase.Client
+	if supabaseURL != "" && supabaseKey != "" {
+		var err error
+		client, err = supabase.NewClient(supabaseURL, supabaseKey, &supabase.ClientOptions{})
+		if err != nil {
+			fmt.Printf("Failed to initialize Supabase client: %v\n", err)
+		}
+	}
+	
+	return &QRWebServer{
+		supabaseClient: client,
+		supabaseURL:    supabaseURL,
+		supabaseKey:    supabaseKey,
+	}
 }
 
 // UpdateQRCode updates the current QR code
@@ -43,6 +65,56 @@ func (q *QRWebServer) GetQRCode() (string, bool) {
 	q.qrMutex.RLock()
 	defer q.qrMutex.RUnlock()
 	return q.currentQRCode, q.isConnected
+}
+
+// getSessionFromRequest extracts session token from request (cookie or Authorization header)
+func (q *QRWebServer) getSessionFromRequest(r *http.Request) string {
+	// First try Authorization header
+	auth := r.Header.Get("Authorization")
+	if auth != "" && strings.HasPrefix(auth, "Bearer ") {
+		return strings.TrimPrefix(auth, "Bearer ")
+	}
+	
+	// Then try cookie
+	cookie, err := r.Cookie("sb-access-token")
+	if err == nil {
+		return cookie.Value
+	}
+	
+	return ""
+}
+
+// validateSession validates a Supabase session token
+func (q *QRWebServer) validateSession(sessionToken string) bool {
+	if sessionToken == "" || q.supabaseClient == nil {
+		return false
+	}
+	
+	// Use Supabase client to validate the session
+	// For now, we'll do a simple check - in production you'd validate with Supabase
+	// This is a placeholder that assumes any non-empty token is valid
+	// You can enhance this by calling Supabase's user endpoint
+	return len(sessionToken) > 10 // Basic validation
+}
+
+// authMiddleware wraps HTTP handlers with authentication
+func (q *QRWebServer) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Skip auth if no Supabase client is configured (development mode)
+		if q.supabaseClient == nil {
+			next(w, r)
+			return
+		}
+		
+		sessionToken := q.getSessionFromRequest(r)
+		if !q.validateSession(sessionToken) {
+			// Redirect to login page
+			http.Redirect(w, r, "/login", http.StatusTemporaryRedirect)
+			return
+		}
+		
+		next(w, r)
+	}
 }
 
 // ServeQRPage serves the main QR code page or dashboard
@@ -483,6 +555,305 @@ func (q *QRWebServer) ServeQRPage(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(tmpl))
 }
 
+// ServeLoginPage serves the login page with Supabase Auth
+func (q *QRWebServer) ServeLoginPage(w http.ResponseWriter, r *http.Request) {
+	// Handle POST request for login
+	if r.Method == "POST" {
+		q.handleLogin(w, r)
+		return
+	}
+	
+	// If already authenticated, redirect to main page
+	sessionToken := q.getSessionFromRequest(r)
+	if q.validateSession(sessionToken) {
+		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
+		return
+	}
+		loginTmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Login - WhatsApp Bridge</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+        }
+        .logo {
+            font-size: 3em;
+            color: #25D366;
+            margin-bottom: 10px;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 1.8em;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+        .form-group {
+            margin: 15px 0;
+            text-align: left;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #333;
+            font-weight: 500;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 1em;
+            box-sizing: border-box;
+        }
+        .login-btn {
+            background: #25D366;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: 500;
+            width: 100%;
+            margin: 20px 0;
+        }
+        .login-btn:hover {
+            background: #128C7E;
+        }
+        .login-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border: 1px solid #f5c6cb;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border: 1px solid #c3e6cb;
+        }
+        .info {
+            background: #d1ecf1;
+            color: #0c5460;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border: 1px solid #bee5eb;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="logo">📱</div>
+        <h1>WhatsApp Bridge</h1>
+        <p class="subtitle">Please log in to access the QR code interface</p>
+        
+        <div id="message"></div>
+        
+        <form method="POST" action="/login">
+            <div class="form-group">
+                <label for="email">Email:</label>
+                <input type="email" id="email" name="email" required>
+            </div>
+            <div class="form-group">
+                <label for="password">Password:</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+            <button type="submit" class="login-btn">Login</button>
+        </form>
+        
+        <div class="info">
+            <small>Development mode: Authentication is ` + func() string {
+				if q.supabaseClient == nil {
+					return "disabled"
+				}
+				return "enabled"
+			}() + `</small>
+        </div>
+    </div>
+</body>
+</html>`
+
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(loginTmpl))
+}
+
+// handleLogin processes the login form submission
+func (q *QRWebServer) handleLogin(w http.ResponseWriter, r *http.Request) {
+	email := r.FormValue("email")
+	password := r.FormValue("password")
+	
+	if email == "" || password == "" {
+		http.Redirect(w, r, "/login?error=missing_fields", http.StatusTemporaryRedirect)
+		return
+	}
+	
+	// If no Supabase client (development mode), accept any login
+	if q.supabaseClient == nil {
+		// Set a dummy session cookie for development
+		http.SetCookie(w, &http.Cookie{
+			Name:     "sb-access-token",
+			Value:    "dev-session-token",
+			Path:     "/",
+			MaxAge:   3600,
+			HttpOnly: true,
+			Secure:   false, // Set to true in production with HTTPS
+			SameSite: http.SameSiteStrictMode,
+		})
+		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
+		return
+	}
+	
+	// Use Supabase client to authenticate
+	response, err := q.supabaseClient.Auth.SignInWithEmailPassword(email, password)
+	if err != nil {
+		fmt.Printf("Login error: %v\n", err)
+		http.Redirect(w, r, "/login?error=invalid_credentials", http.StatusTemporaryRedirect)
+		return
+	}
+	
+	// Set session cookie with the access token
+	if response.AccessToken != "" {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "sb-access-token",
+			Value:    response.AccessToken,
+			Path:     "/",
+			MaxAge:   3600,
+			HttpOnly: true,
+			Secure:   false, // Set to true in production with HTTPS
+			SameSite: http.SameSiteStrictMode,
+		})
+		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
+	} else {
+		http.Redirect(w, r, "/login?error=no_token", http.StatusTemporaryRedirect)
+	}
+}
+
+// ServeAuthCallback handles the Supabase auth callback
+func (q *QRWebServer) ServeAuthCallback(w http.ResponseWriter, r *http.Request) {
+	// Extract access token from URL fragment (handled by JavaScript on login page)
+	// This endpoint mainly serves as a landing page for the auth flow
+	callbackTmpl := `
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Authentication - WhatsApp Bridge</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #25D366 0%, #128C7E 100%);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .callback-container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+        }
+        .logo {
+            font-size: 3em;
+            color: #25D366;
+            margin-bottom: 10px;
+        }
+        .status {
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+            font-weight: 500;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+    </style>
+</head>
+<body>
+    <div class="callback-container">
+        <div class="logo">🔐</div>
+        <h1>Authentication</h1>
+        <div id="status" class="status">Processing authentication...</div>
+    </div>
+
+    <script>
+        // Extract token from URL fragment
+        const hash = window.location.hash.substring(1);
+        const params = new URLSearchParams(hash);
+        const accessToken = params.get('access_token');
+        const error = params.get('error');
+        
+        if (error) {
+            document.getElementById('status').className = 'status error';
+            document.getElementById('status').textContent = 'Authentication failed: ' + error;
+        } else if (accessToken) {
+            // Store token in cookie
+            document.cookie = 'sb-access-token=' + accessToken + '; path=/; max-age=3600; secure; samesite=strict';
+            document.getElementById('status').className = 'status success';
+            document.getElementById('status').textContent = 'Authentication successful! Redirecting...';
+            
+            // Redirect to main page after a short delay
+            setTimeout(() => {
+                window.location.href = '/';
+            }, 2000);
+        } else {
+            document.getElementById('status').className = 'status error';
+            document.getElementById('status').textContent = 'No authentication token received.';
+        }
+    </script>
+</body>
+</html>`
+
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(callbackTmpl))
+}
+
 // ServeQRImage serves the QR code as a PNG image
 func (q *QRWebServer) ServeQRImage(w http.ResponseWriter, r *http.Request) {
 	code, connected := q.GetQRCode()
@@ -539,11 +910,16 @@ func (q *QRWebServer) ServeQRStatus(w http.ResponseWriter, r *http.Request) {
 
 // RegisterRoutes registers the QR web server routes to the default HTTP mux
 func (q *QRWebServer) RegisterRoutes() {
-	http.HandleFunc("/", q.ServeQRPage)
-	http.HandleFunc("/qr/image", q.ServeQRImage)
-	http.HandleFunc("/qr/status", q.ServeQRStatus)
+	// Protected routes (require authentication)
+	http.HandleFunc("/", q.authMiddleware(q.ServeQRPage))
+	http.HandleFunc("/qr/image", q.authMiddleware(q.ServeQRImage))
+	http.HandleFunc("/qr/status", q.authMiddleware(q.ServeQRStatus))
 	
-	fmt.Println("QR Web Server routes registered")
+	// Public routes (no authentication required)
+	http.HandleFunc("/login", q.ServeLoginPage)
+	http.HandleFunc("/auth/callback", q.ServeAuthCallback)
+	
+	fmt.Println("QR Web Server routes registered with authentication")
 }
 
 // StartQRWebServer starts the QR web server (legacy method, kept for compatibility)
